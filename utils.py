@@ -7,24 +7,24 @@ import streamlit as st
 import os
 
 
-# @st.cache_resource
-# def setup_gcp_credentials():
-#     """Sets up Google Cloud credentials from Streamlit Secrets."""
-#     try:
-#         # Check if running in Streamlit Cloud
-#         if "GCP_CREDENTIALS" in st.secrets:
-#             # Create a temporary file with the credentials
-#             creds_json_str = st.secrets["GCP_CREDENTIALS"]
-#             with open("gcp_key.json", "w") as f:
-#                 f.write(creds_json_str)
-#             # Point the library to this temporary file
-#             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_key.json"
-#         # If not on Streamlit Cloud, it will fall back to local gcloud auth
-#     except Exception as e:
-#         st.error(f"Failed to set up GCP credentials: {e}")
+@st.cache_resource
+def setup_gcp_credentials():
+    """Sets up Google Cloud credentials from Streamlit Secrets."""
+    try:
+        # Check if running in Streamlit Cloud
+        if "GCP_CREDENTIALS" in st.secrets:
+            # Create a temporary file with the credentials
+            creds_json_str = st.secrets["GCP_CREDENTIALS"]
+            with open("gcp_key.json", "w") as f:
+                f.write(creds_json_str)
+            # Point the library to this temporary file
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_key.json"
+        # If not on Streamlit Cloud, it will fall back to local gcloud auth
+    except Exception as e:
+        st.error(f"Failed to set up GCP credentials: {e}")
 
-# # Call the setup function at the start
-# setup_gcp_credentials()
+# Call the setup function at the start
+setup_gcp_credentials()
 
 GOOGLE_CLOUD_PROJECT="traverse-project-421916"
 GOOGLE_GENAI_USE_VERTEXAI=True
