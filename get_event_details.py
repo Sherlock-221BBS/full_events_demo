@@ -26,10 +26,10 @@ def setup_gcp_credentials():
         # Check if running in Streamlit Cloud
         if "GCP_CREDENTIALS" in st.secrets:
             # Create a temporary file with the credentials
-            creds_json_str = st.secrets["GCP_CREDENTIALS"]
-            creds_dict = json.loads(creds_json_str)
+            
+            creds_dict = dict(st.secrets["GCP_CREDENTIALS"])
             with open("gcp_key.json", "w") as f:
-                json.dumps(creds_dict, f)
+                json.dump(creds_dict, f)
             # Point the library to this temporary file
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_key.json"
         # If not on Streamlit Cloud, it will fall back to local gcloud auth
