@@ -16,6 +16,7 @@ from PIL import Image
 from PIL import Image, UnidentifiedImageError
 import io
 from utils import llm_response_gemini_genai
+from serpapi import GoogleSearch
 
 # load_dotenv()
 
@@ -437,6 +438,39 @@ def find_candidate_links_using_perplexity_search(event_name, destination):
     except Exception as e:
         print(f"Error fetching results for {event_name} at {destination}: {e}")
         return []
+    
+
+def find_images_with_serpapi(query: str, limit: int = 10) -> list[str]:
+    """
+    Performs a Google Image search using SerpApi and returns a list of image URLs.
+    """
+    print(f"Querying SerpApi for images with: '{query}'")
+    serpapi_key = os.getenv("SERP_API_KEY")
+    if not serpapi_key:
+        print("Warning: SERPAPI_API_KEY not found. Skipping image search.")
+        return []
+
+    params = {
+        "q": query,
+        "engine": "google_images",
+        "ijn": "0",  # Page number
+        "api_key": serpapi_key,
+    }
+
+    try:
+        search = GoogleSearch(params)
+        results = search.get_dict()
+        
+        if "images_results" in results:
+            # Extract the URL of the full-sized original image
+            image_urls = [result["original"] for result in results["images_results"]]
+            return image_urls[:limit]
+        else:
+            return []
+    except Exception as e:
+        print(f"Error calling SerpApi: {e}")
+        return []
+
 
 
 def get_event_visuals(event_data: dict, source_url: str, destination: str, unsplash_query: str):
@@ -456,18 +490,20 @@ def get_event_visuals(event_data: dict, source_url: str, destination: str, unspl
     print(f"Starting visual asset search for '{event_data['event_name']}'")
     
     # --- Primary Path: Find and Verify Image from Source URL ---
-    html_content = requests.get(source_url, headers={'User-Agent': 'Mozilla/5.0'}).text
-    if html_content:
-        candidate_urls = extract_candidate_image_urls(html_content, source_url)
-        print(f"\n\ncandidate urls are {candidate_urls}")
-        print(f"Found {len(candidate_urls)} candidate images on the page.")
-        
-        for img_url in candidate_urls:
-            image_data = download_image_data(img_url)
-            if image_data:
-                if is_image_relevant_llm(image_data, event_data['event_name'], destination, description = event_data["description"]):
-                    # Success! We found a verified image.
-                    return {"image_url": img_url, "unsplash_images": None}
+    # html_content = requests.get(source_url, headers={'User-Agent': 'Mozilla/5.0'}).text
+    # if html_content:
+    event_name = event_data.get("event_name")
+    query = f"{event_name} in {destination}"
+    candidate_urls = find_images_with_serpapi(query = query)
+    print(f"\n\ncandidate urls are {candidate_urls}")
+    print(f"Found {len(candidate_urls)} candidate images on the page.")
+    
+    for img_url in candidate_urls:
+        image_data = download_image_data(img_url)
+        if image_data:
+            if is_image_relevant_llm(image_data, event_data['event_name'], destination, description = event_data["description"]):
+                # Success! We found a verified image.
+                return {"image_url": img_url, "unsplash_images": None}
 
     # --- Fallback Path: Query Unsplash ---
     print(f"Could not find a verified image for '{event_data['event_name']}'. Falling back to Unsplash.")
