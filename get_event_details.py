@@ -17,7 +17,7 @@ from PIL import Image, UnidentifiedImageError
 import io
 from utils import llm_response_gemini_genai
 
-load_dotenv()
+# load_dotenv()
 
 @st.cache_resource
 def setup_gcp_credentials():
@@ -221,7 +221,7 @@ def extract_image_from_html(html_content):
 
 
 def query_unsplash(query):
-    UNSPLASH_API_KEY = os.getenv("UNSPLASH_API_KEY")
+    UNSPLASH_API_KEY = st.secrets["UNSPLASH_API_KEY"]
     url = "https://api.unsplash.com/search/photos"
     
     start_time = time.time()
@@ -323,8 +323,7 @@ def get_event_details_prompt(destination, event_name, start_date):
 def llm_response_pplx(conversation, error_response=None, max_retries=3, retry_delay=1):
     """Sends a request to Perplexity AI with an automatic retry mechanism."""
     pplx_url = "https://api.perplexity.ai/chat/completions"
-    pplx_api_key = os.getenv("PERPLEXITY_API_KEY")
-    # print(f"perplexity api key: {pplx_api_key}")
+    pplx_api_key = st.secrets["PERPLEXITY_API_KEY"]
 
     payload = {
         "model": "sonar-pro",

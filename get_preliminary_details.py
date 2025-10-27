@@ -10,7 +10,7 @@ import streamlit as st
 from json_repair import repair_json
 from utils import llm_response_gemini_genai
 from dotenv import load_dotenv
-load_dotenv()
+# load_dotenv()
 
 @st.cache_resource
 def setup_gcp_credentials():
@@ -62,7 +62,7 @@ def convert_to_json(inp, response_format: dict):
 def llm_response_pplx(conversation, error_response=None, max_retries=3, retry_delay=1):
     """Sends a request to Perplexity AI with an automatic retry mechanism."""
     pplx_url = "https://api.perplexity.ai/chat/completions"
-    pplx_api_key = os.getenv("PERPLEXITY_API_KEY")
+    pplx_api_key = st.secrets("PERPLEXITY_API_KEY")
     # print(f"perplexity api key: {pplx_api_key}")
 
     payload = {
