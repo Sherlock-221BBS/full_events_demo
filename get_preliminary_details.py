@@ -9,8 +9,6 @@ import requests
 import streamlit as st
 from json_repair import repair_json
 from utils import llm_response_gemini_genai
-from dotenv import load_dotenv
-# load_dotenv()
 
 @st.cache_resource
 def setup_gcp_credentials():
@@ -177,6 +175,93 @@ def llm_response_gemini_with_google_search_grounding(
         print(f"Time taken in llm_response_gemini_with_google_search_grounding: {end_time - start_time} seconds")
 
 
+def llm_response_gemini_genai(conversation, output_key=None, mandatory_keys=[], error_response=None, model_args={}, max_retries=3, retry_delay=1, structured=True, stream=False):
+    """
+    Send a request to Gemini API with automatic retry mechanism.
+    
+    Args:
+        conversation: List of conversation messages
+        output_key: Optional key to extract from the response
+        error_response: Default error response to return
+        model_args: Additional model parameters
+        max_retries: Maximum number of retry attempts
+        retry_delay: Initial delay between retries (will be exponentially increased)
+        structured: Boolean indicating if the response should be structured (JSON) or unstructured (text)
+    
+    Returns:
+        Parsed JSON response or error_response
+    """
+
+    retries = 0
+    response = None
+    
+    while retries <= max_retries:
+        try:
+            config = types.GenerateContentConfig(
+                system_instruction=conversation[0].get("content"),
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                    disable=True
+                ),
+                temperature=model_args.get("temperature") or 0.2,
+                max_output_tokens=model_args.get("max_tokens") or 8191,
+                response_mime_type="application/json" if structured else "text/plain",
+            )
+            if "thinking_budget" in model_args:
+                config.thinking_config = types.ThinkingConfig(thinking_budget=model_args.get("thinking_budget"))
+            
+            contents = "\n".join([conv.get("content") for conv in conversation[1:]])
+            response = genai_client.models.generate_content(
+                model=model_args.get("model") or "gemini-2.0-flash-001",
+                config = config,
+                contents=contents
+            )
+
+            # Extract the answer from the response
+            content = response.text
+            print(f"Response from Gemini LLM:\n{content}")
+            
+            try:
+                content = repair_json(content)
+                answer = json.loads(content)
+            except json.JSONDecodeError:
+                print(f"JSON decode error: {content}")
+                
+                raise ValueError("JSON decode error")
+            
+            if mandatory_keys:
+                for key in mandatory_keys:
+                    if key not in answer.keys():
+                        print(f"key {key} not found in response")
+                        
+                        raise ValueError(f"key {key} not found in response")
+            
+            if output_key is None:
+                return answer
+            
+            if output_key in answer:
+                return answer.get(output_key)
+            else:
+                raise ValueError(f"key {output_key} not found in response")
+            
+        except Exception as e:
+            
+            retries += 1
+            if retries > max_retries:
+                print(f"Max retries ({max_retries}) exceeded. Last error: {str(e)}")
+                
+                return error_response
+            
+            # Calculate exponential backoff delay
+            backoff_delay = retry_delay * (2 ** (retries - 1))
+            print(f"Attempt {retries}/{max_retries} failed: {str(e)}. Retrying in {backoff_delay} seconds...")
+            
+            time.sleep(backoff_delay)
+
+
+
+
+
+
 def get_system_prompt(DESTINATION):
     """Generates the detailed system prompt for the LLM."""
     current_date = datetime.now(timezone.utc)
@@ -297,18 +382,77 @@ def append_response_to_file(data_to_append, filepath):
 
 
 
-def fetch_events_for_destination(destination, output_filepath=None, cron_job=False):
+def parse_user_query_for_event_details(query: str) -> dict:
     """
-    Main function with a switch for two different processing paths:
-    - cron_job=True: Slow, high-quality, two-step enrichment.
-    - cron_job=False: Fast, single-call enrichment with parallel validation.
+    Uses the non-grounded Gemini function to parse a user's query.
+    """
+    print(f"Parsing user query with Gemini: '{query}'")
+    
+    parsing_prompt = f"""You are an AI assistant that parses user queries about travel events into a structured JSON format. Your task is to extract `destination` and `event_type_query`. If the query is generic (e.g., "events in Dubai"), set `event_type_query` to "generic". If no destination is found, set `destination` to null. Your entire response must be a single, valid JSON object.
+
+    **Examples:**
+    - User Query: "music festivals happening in Dubai" -> {{"destination": "Dubai", "event_type_query": "music festivals"}}
+    - User Query: "Goa" -> {{"destination": "Goa", "event_type_query": "generic"}}
+
+    **User Query to Parse:**
+    "{query}"
+    """
+    
+    conversation = [
+        {"role": "system", "content": "You are a JSON-only query parsing assistant that strictly follows the user's instructions."},
+        {"role": "user", "content": parsing_prompt}
+    ]
+    
+    # Use the non-grounded, structured JSON function as requested
+    parsed_response = llm_response_gemini_genai(conversation, structured=True)
+    
+    if isinstance(parsed_response, dict):
+        return parsed_response
+    else:
+        # Fallback in case of an error
+        return {"destination": None, "event_type_query": "generic"}
+
+# --- MODIFIED: Dynamic Prompt Generator ---
+def get_dynamic_events_prompt(destination: str, event_type_query: str) -> str:
+    """Generates a dynamic prompt for the main event search."""
+    # This function's logic remains the same
+    current_date = datetime.now(timezone.utc).strftime("%B %d, %Y")
+    base_prompt = f"""You are an expert travel guide. Today is {current_date}. Find upcoming events in {destination} for tourists in the next 30 days. Respond in a valid JSON array `[]` where each object has "event_name" and "start_date". Do not include business conferences or any text outside the JSON array."""
+    if event_type_query == "generic":
+        specific_instruction = "Target a mix of events: concerts, festivals, sports, culture, theatre, and comedy."
+    else:
+        specific_instruction = f"You MUST find events specifically related to: **'{event_type_query}'**."
+    return f"{base_prompt}\n{specific_instruction}"
+
+# --- MAIN ORCHESTRATOR FUNCTION ---
+def fetch_events_for_destination(query: str) -> list:
+    """
+    Orchestrates the two-step process using a natural language query and your specific helper functions.
     """
     start_time = time.time()
-    print(f"Starting event data collection for: {destination} (Mode: {'Cron Job' if cron_job else 'Live Request'})")
     
-    # Step 1: Get initial event list. For live requests, this prompt MUST ask for the booking link.
-    conversation = get_conversation(destination) # Ensure your get_conversation/prompt logic handles this difference
-    raw_response = llm_response_gemini_with_google_search_grounding(conversation, structured=False)
+    # Step 1: Parse the user's query using the non-grounded function
+    parsed_details = parse_user_query_for_event_details(query)
+    
+    destination = parsed_details.get("destination")
+    event_type = parsed_details.get("event_type_query", "generic")
+
+    if not destination:
+        print(f"Error: Could not identify a destination in the query: '{query}'")
+        return {"destination": None, "events": []}
+
+    print(f"Identified Destination: '{destination}', Event Type: '{event_type}'")
+    
+    # Step 2: Generate the dynamic prompt for the main search
+    system_prompt_for_search = get_dynamic_events_prompt(destination, event_type)
+    
+    conversation_for_search = [
+        {"role": "system", "content": system_prompt_for_search},
+        {"role": "user", "content": f"Find events in {destination} based on the system instructions."}
+    ]
+    
+    # Step 3: Call the grounded search function
+    raw_response = llm_response_gemini_with_google_search_grounding(conversation_for_search, structured=False)
     cleaned = re.sub(r"^```json\s*|\s*```$", "", raw_response.strip())
 
     # Parse JSON string into Python list
@@ -316,27 +460,17 @@ def fetch_events_for_destination(destination, output_filepath=None, cron_job=Fal
     print(f"number of evetns before fitlering: {len(events)}")
     events = filter_past_events(events = events)
     print(f"number of events after filtering: {len(events)}")
-
-    print(f"type of raw_response: {type(events)}")
-
-   
-
-    # print(f"\n\n{raw_response}\n\n")
     
-    
-    end_time = time.time()
-    response_time = end_time - start_time
-    if output_filepath:
-        final_output = {
-            "destination": destination,
-            "response": events,
-            "response_time": response_time
-        }
-        # append_response_to_file(final_output, output_filepath)
-    print(f"time took for {destination}: {response_time}")
+    if not isinstance(events, list):
+        print("Received a non-list response for events. Returning empty.")
+        events = []
+        
+    print(f"Found {len(events)} events before filtering.")
+    # events = filter_past_events(events=events)
+    print(f"Returning {len(events)} events after filtering.")
 
-    return events
-
+    print(f"Total time for query '{query}': {time.time() - start_time:.2f} seconds")
+    return {"destination": destination, "events": events}
 
 
 if __name__ == "__main__":

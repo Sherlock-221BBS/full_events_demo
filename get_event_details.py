@@ -440,7 +440,7 @@ def find_candidate_links_using_perplexity_search(event_name, destination):
         return []
     
 
-def find_images_with_serpapi(query: str, limit: int = 10) -> list[str]:
+def find_images_with_serpapi(query: str, limit: int = 3) -> list[str]:
     """
     Performs a Google Image search using SerpApi and returns a list of image URLs.
     """
